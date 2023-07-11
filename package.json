@@ -1,0 +1,24 @@
+{
+  "name": "earnings",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@next/font": "13.4.8",
+    "axios": "^1.4.0",
+    "dotenv": "^16.3.1",
+    "eslint": "8.44.0",
+    "eslint-config-next": "13.4.8",
+    "google-auth-library": "^8.9.0",
+    "google-spreadsheet": "^4.0.2",
+    "googleapis": "^121.0.0",
+    "next": "13.4.8",
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  }
+}
