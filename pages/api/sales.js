@@ -21,14 +21,8 @@ export default async function sales(req, res) {
   } else {
     res.status(500).json({Error: 'Invalid address'});
   }
-  //const address_list = '0x78Ad5cb388C1B564cDDf713a2891ab8559fA5C49'; //fs
-  //const address = '0x3ac61447a75149ba67639100ecc92c76fb20941c'; //fc
-  //const address = '0x14977b0dBE7e155F9907effECbB70c9b7a05e737'; //nk
-  //const address = '0xa86d808eC95C138d4F4d3bbD76c17Bbb0Bbf6b21'; //hh
 
-    //await outputCsv(sales);
 }
-
 
 
 const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
