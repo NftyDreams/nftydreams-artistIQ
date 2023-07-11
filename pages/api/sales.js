@@ -14,12 +14,12 @@ export default async function sales(req, res) {
     try {
       const sales = await processAddress(address.toLowerCase(), email, 4);
       res.status(200).json(sales);
-    } catch(err) {
+    } catch (err) {
       console.log(err)
       res.status(500).json({});
     }
   } else {
-    res.status(500).json({Error: 'Invalid address'});
+    res.status(500).json({ Error: 'Invalid address' });
   }
 
 }
@@ -59,7 +59,7 @@ const REPORT_TIME_TO_LIVE = 1 * 12 * 60 * 60 * 1000; // 12 hours
 const WEI_DIVISOR = Math.pow(10, 18);
 
 
-require('dotenv').config({ path: './.env' }); 
+require('dotenv').config({ path: './.env' });
 
 const SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
@@ -73,7 +73,7 @@ const jwtWithImpersonation = new JWT({
   scopes: SCOPES,
 });
 
-const drive = google.drive({version: 'v3', auth: jwtWithImpersonation});
+const drive = google.drive({ version: 'v3', auth: jwtWithImpersonation });
 
 function getSaleInfo() {
 
@@ -100,80 +100,82 @@ async function processAddress(address, email, skipLimit) {
   let error = null;
   let docInfo = null;
   let mergedTxs = null;
-  
+
   try {
+
     address = address.toLowerCase();
     let addressLookup = KNOWN_ADDRESSES;
     addressLookup[address] = TEXT_ARTIST;
 
-    // Get all internal transactions
-    // Fetch every internal transaction and then for each transaction call an end-point that
-    // returns details about the transaction to build a complete picture
-    const allInternalTxs = await getAllPages(fetchTx, {module: 'account', action: 'txlistinternal', field: 'address', data: address}, API_DELAY);
-    const done = [];
-    
-    mergedTxs = [getSaleInfo()];
-    mergedTxs[0].blockNumber = 'TOTAL'; // Top row has aggregate sales
-    mergedTxs[0].from_1 = address;
+    docInfo = await findOrCreateGoogleSheet(address);
+    if (docInfo.updateRequired) {    
+      
+      // Get all internal transactions
+      // Fetch every internal transaction and then for each transaction call an end-point that
+      // returns details about the transaction to build a complete picture
+      const allInternalTxs = await getAllPages(fetchTx, { module: 'account', action: 'txlistinternal', field: 'address', data: address }, API_DELAY);
+      const done = [];
 
-    //allInternalTxs.length = 5;
-    for(let a=0; a<allInternalTxs.length; a++) {
+      mergedTxs = [getSaleInfo()];
+      mergedTxs[0].blockNumber = 'TOTAL'; // Top row has aggregate sales
+      mergedTxs[0].from_1 = address;
 
-      if (done.indexOf(allInternalTxs[a].hash) < 0) {
-        done.push(allInternalTxs[a].hash);
-      } else {
-        continue;
-      }
+      //allInternalTxs.length = 5;
+      for (let a = 0; a < allInternalTxs.length; a++) {
 
-      // Get the transaction summary
-      const mergedTx = getSaleInfo();
-      mergedTx.utcDate = `=epochtodate(${allInternalTxs[a].timeStamp})`;
+        if (done.indexOf(allInternalTxs[a].hash) < 0) {
+          done.push(allInternalTxs[a].hash);
+        } else {
+          continue;
+        }
 
-      // For each internal transaction, get all the detailed transfers
-      const internalTxs = await getAllPages(fetchTx, {module: 'account', action: 'txlistinternal', field: 'txhash', data: allInternalTxs[a].hash}, API_DELAY);    
+        // Get the transaction summary
+        const mergedTx = getSaleInfo();
+        mergedTx.utcDate = `=epochtodate(${allInternalTxs[a].timeStamp})`;
 
-      if (internalTxs.length < skipLimit) {
-        // For each internal transfer do some cleanup and aggregation
-        const txList = [];
-        internalTxs.forEach((tx) => {
-          txList.push({
-            from: tx.from.toLowerCase(),
-            to: tx.to.toLowerCase(),
-            value: parseInt(tx.value)
+        // For each internal transaction, get all the detailed transfers
+        const internalTxs = await getAllPages(fetchTx, { module: 'account', action: 'txlistinternal', field: 'txhash', data: allInternalTxs[a].hash }, API_DELAY);
+
+        if (internalTxs.length < skipLimit) {
+          // For each internal transfer do some cleanup and aggregation
+          const txList = [];
+          internalTxs.forEach((tx) => {
+            txList.push({
+              from: tx.from.toLowerCase(),
+              to: tx.to.toLowerCase(),
+              value: parseInt(tx.value)
+            });
           });
-        });
 
-        if (txList.length > 1 && (FILTER_ADDRESSES[txList[0].from] === undefined) && (FILTER_ADDRESSES[txList[0].to] === undefined)){ // Skip sending money
-          mergedTx['sale'] = 0; // To keep a running total to get actual sale amount
+          if (txList.length > 1 && (FILTER_ADDRESSES[txList[0].from] === undefined) && (FILTER_ADDRESSES[txList[0].to] === undefined)) { // Skip sending money
+            mergedTx['sale'] = 0; // To keep a running total to get actual sale amount
 
-          // If the internal transfer has funds going to contract and
-          // then from contract to individual accounts, we don't want
-          // to count that in the total so we zero it out here
-          if (txList[0].to === txList[1].from) {
-            txList[0].value = 0.0;
+            // If the internal transfer has funds going to contract and
+            // then from contract to individual accounts, we don't want
+            // to count that in the total so we zero it out here
+            if (txList[0].to === txList[1].from) {
+              txList[0].value = 0.0;
+            }
+
+            txList.forEach((t, idx) => {
+              mergedTx[`from_${idx + 1}`] = addressLookup[t.from] ?? t.from;
+              mergedTx[`to_${idx + 1}`] = addressLookup[t.to] ?? t.to;
+              mergedTx[`amount_${idx + 1}`] = t.value / WEI_DIVISOR;
+              mergedTx['sale'] += t.value;
+            });
+            mergedTx['sale'] = `=hyperlink("https://etherscan.io/tx/${allInternalTxs[a].hash}", ${mergedTx['sale'] / WEI_DIVISOR})`;
+            mergedTx['blockNumber'] = allInternalTxs[a].blockNumber;
+
+            mergedTxs.push(mergedTx);
           }
-
-          txList.forEach((t, idx) => {
-            mergedTx[`from_${idx+1}`] = addressLookup[t.from] ?? t.from;
-            mergedTx[`to_${idx+1}`] = addressLookup[t.to] ?? t.to;
-            mergedTx[`amount_${idx+1}`] = t.value / WEI_DIVISOR;
-            mergedTx['sale'] += t.value;
-          });
-          mergedTx['sale'] = `=hyperlink("https://etherscan.io/tx/${allInternalTxs[a].hash}", ${mergedTx['sale'] / WEI_DIVISOR})`;
-          mergedTx['blockNumber'] = allInternalTxs[a].blockNumber;
-    
-          mergedTxs.push(mergedTx);
         }
       }
-    }
-
-    docInfo = await findOrCreateGoogleSheet(address);
-    if (docInfo.updateRequired) {
+      
       await hydrateGoogleSheet(docInfo.doc, mergedTxs, email);
     }
     console.log(`✅ Finished processing for ${address}`);
   }
-  catch(e) {
+  catch (e) {
     error = e.message;
   }
   return {
@@ -210,17 +212,17 @@ async function hydrateGoogleSheet(doc, sales, email) {
 
   const sheet = doc.sheetsByIndex[0];
   await sheet.setHeaderRow(['UTC Date', 'Block', 'Sales (ETH)'
-                    , 'From (1)', 'To (1)', 'Amount (1)'
-                    , 'From (2)', 'To (2)', 'Amount (2)'
-                    , 'From (3)', 'To (3)', 'Amount (3)']);
+    , 'From (1)', 'To (1)', 'Amount (1)'
+    , 'From (2)', 'To (2)', 'Amount (2)'
+    , 'From (3)', 'To (3)', 'Amount (3)']);
 
-  await sheet.clearRows(); 
+  await sheet.clearRows();
   await sheet.loadCells(`A1:O2000`);
 
   // HEADER ROW
-  for(let t=0;t<15;t++) {
+  for (let t = 0; t < 15; t++) {
     const cell = sheet.getCell(0, t);
-    cell.textFormat = { bold: true, fontSize: 12  };
+    cell.textFormat = { bold: true, fontSize: 12 };
     cell.backgroundColor = {
       red: 1,
       green: 0.768,
@@ -231,35 +233,35 @@ async function hydrateGoogleSheet(doc, sales, email) {
 
   // TOTAL ROW
   let totalRow = Object.values(sales[0]);
-  for(let t=0;t<4;t++) {
+  for (let t = 0; t < 4; t++) {
     const cell = sheet.getCell(2, t);
     cell.textFormat = { bold: true, fontSize: 12 };
-    if (t==0) {
+    if (t == 0) {
       cell.formula = totalRow[t];
-    } else if (t==2) {
+    } else if (t == 2) {
       cell.formula = '=sum(C5:C2000)';
       cell.horizontalAlignment = 'RIGHT';
-      cell.numberFormat = { type: 'NUMBER', pattern: '0.000000'};
+      cell.numberFormat = { type: 'NUMBER', pattern: '0.000000' };
     } else {
       cell.value = totalRow[t];
     }
   }
 
-  for(let s=1;s<sales.length;s++) {
+  for (let s = 1; s < sales.length; s++) {
     let row = s + 4;
     let vals = Object.values(sales[s]);
-    for(let v=0;v<vals.length;v++) {
+    for (let v = 0; v < vals.length; v++) {
       const cell = sheet.getCell(row, v);
-      if (v==0) {
+      if (v == 0) {
         cell.formula = vals[v];
-      } else if (v==2) {
+      } else if (v == 2) {
         cell.formula = vals[v];
-        cell.numberFormat = { type: 'NUMBER', pattern: '0.000000'};
+        cell.numberFormat = { type: 'NUMBER', pattern: '0.000000' };
         cell.horizontalAlignment = 'RIGHT';
-      } else if (v==5 || v==8 || v==11) {
+      } else if (v == 5 || v == 8 || v == 11) {
         cell.numberValue = vals[v];
         cell.horizontalAlignment = 'RIGHT';
-        cell.numberFormat = { type: 'NUMBER', pattern: '0.000000'};
+        cell.numberFormat = { type: 'NUMBER', pattern: '0.000000' };
       } else {
         cell.value = vals[v];
         if (vals[v] == TEXT_ARTIST) {
@@ -269,7 +271,7 @@ async function hydrateGoogleSheet(doc, sales, email) {
             blue: 0,
             alpha: 1
           }
-      
+
         }
       }
     }
@@ -278,60 +280,60 @@ async function hydrateGoogleSheet(doc, sales, email) {
 
   try {
     if (email) {
-      await doc.share(email, {role: 'writer'});
-    }  
-  } catch(err) {
+      await doc.share(email, { role: 'writer' });
+    }
+  } catch (err) {
 
   }
 }
 
 async function findOrCreateGoogleSheet(address) {
 
-    // Check if the file exists
-    const res = await drive.files.list({
-      q: `name contains \'${address}\' and trashed=false`,
-      fields: 'nextPageToken, files(id, name, modifiedTime)',
-      spaces: 'drive',
+  // Check if the file exists
+  const res = await drive.files.list({
+    q: `name contains \'${address}\' and trashed=false`,
+    fields: 'nextPageToken, files(id, name, modifiedTime)',
+    spaces: 'drive',
+  });
+
+  let updateRequired = false;
+  let doc = null;
+
+  if (res.data.files.length === 1) {
+    doc = new GoogleSpreadsheet(res.data.files[0].id, jwtWithImpersonation);
+    await doc.loadInfo();
+    console.log(`Existing doc ${res.data.files[0].id} was loaded`);
+    // Check if the file is more than 12 hours old
+    const thresholdTime = new Date().getTime() - REPORT_TIME_TO_LIVE;
+    const modifiedTime = Date.parse(res.data.files[0].modifiedTime);
+    updateRequired = modifiedTime < thresholdTime;
+    if (updateRequired) {
+      const sheet = doc.sheetsByIndex[0];
+      await sheet.clearRows();
+    }
+  } else {
+    // Create Google Sheet
+    doc = await GoogleSpreadsheet.createNewSpreadsheetDocument(jwtWithImpersonation, { title: address });
+    await doc.setPublicAccessLevel('reader');
+
+    // Move the file to the right folder
+    const file = await drive.files.get({
+      fileId: doc.spreadsheetId,
+      fields: 'parents',
     });
 
-    let updateRequired = false;
-    let doc = null;
+    await drive.files.update({
+      fileId: doc.spreadsheetId,
+      addParents: '1rZbbPULAS1aP9Q-pB6Jq5_VWoj7dRnEG', //support@nftydreams.com/artisIQ/Lens/public
+      removeParents: file.data.parents.join(','),
+      fields: 'id, parents',
+    });
+    updateRequired = true;
 
-    if (res.data.files.length === 1) {
-      doc = new GoogleSpreadsheet(res.data.files[0].id, jwtWithImpersonation);
-      await doc.loadInfo();
-      console.log(`Existing doc ${res.data.files[0].id} was loaded`);
-      // Check if the file is more than 12 hours old
-      const thresholdTime = new Date().getTime() - REPORT_TIME_TO_LIVE;
-      const modifiedTime = Date.parse(res.data.files[0].modifiedTime);
-      updateRequired = modifiedTime < thresholdTime;
-      if (updateRequired) {
-        const sheet = doc.sheetsByIndex[0];
-        await sheet.clearRows();
-      }
-    } else {
-      // Create Google Sheet
-      doc = await GoogleSpreadsheet.createNewSpreadsheetDocument(jwtWithImpersonation, { title: address });
-      await doc.setPublicAccessLevel('reader');
-      
-      // Move the file to the right folder
-      const file = await drive.files.get({
-        fileId: doc.spreadsheetId,
-        fields: 'parents',
-      });
+    console.log(`New doc ${doc.spreadsheetId} was created`);
+  }
 
-      await drive.files.update({
-        fileId: doc.spreadsheetId,
-        addParents: '1rZbbPULAS1aP9Q-pB6Jq5_VWoj7dRnEG', //support@nftydreams.com/artisIQ/Lens/public
-        removeParents: file.data.parents.join(','),
-        fields: 'id, parents',
-      });
-      updateRequired = true;  
-
-      console.log(`New doc ${doc.spreadsheetId} was created`);
-    }
-
-    return { doc, updateRequired, error: null }
+  return { doc, updateRequired, error: null }
 }
 
 
@@ -339,17 +341,17 @@ async function getAllPages(method, options, interval) {
   let allTxs = [];
   let page = 1;   // start index is 1
   let pageTx;
-  do{    
+  do {
     pageTx = [];
-    const result = await throttle(method, {module: options.module, action: options.action, field: options.field, data: options.data, page: page++}, interval)
+    const result = await throttle(method, { module: options.module, action: options.action, field: options.field, data: options.data, page: page++ }, interval)
     if (Array.isArray(result)) {
       pageTx = [...pageTx, ...result];
     } else {
-      if (result === null) {          
+      if (result === null) {
       } else {
         pageTx = null;
       }
-    }            
+    }
 
     if (pageTx === null) {
       allTxs = null;
@@ -357,9 +359,9 @@ async function getAllPages(method, options, interval) {
     } else if (pageTx.length === 0) {
       break;
     } else {
-      allTxs = [...allTxs,...pageTx]
+      allTxs = [...allTxs, ...pageTx]
     }
-  } while(true && pageTx.length >= PAGE_SIZE && page < 1000)
+  } while (true && pageTx.length >= PAGE_SIZE && page < 1000)
   console.log(`${options.action}: Fetched ${allTxs ? allTxs.length : 0} transactions for ${options.data}`)
 
   return allTxs
@@ -371,7 +373,7 @@ async function throttle(method, options, interval) {
       try {
         const result = await method.call(this, options);
         resolve(result);
-      } catch(error) {
+      } catch (error) {
         console.log(error);
         resolve(error.message);
       }
@@ -379,17 +381,17 @@ async function throttle(method, options, interval) {
   });
 }
 
-async function fetchTx(options) { 
-    const url = `https://api.etherscan.io/api?module=${options.module}&action=${options.action}` +
-                `&${options.field}=${options.data}&page=${options.page}&offset=${PAGE_SIZE}&startblock=0&sort=asc` +
-                `&apikey=${process.env.ETHERSCAN_API_KEY}`              
-                
-    const response = await axios.get(url);
-    if (Array.isArray(response.data.result)) {
-      return response.data.result;
-    } else {
-      return [response.data.result];
-    }                               
+async function fetchTx(options) {
+  const url = `https://api.etherscan.io/api?module=${options.module}&action=${options.action}` +
+    `&${options.field}=${options.data}&page=${options.page}&offset=${PAGE_SIZE}&startblock=0&sort=asc` +
+    `&apikey=${process.env.ETHERSCAN_API_KEY}`
+
+  const response = await axios.get(url);
+  if (Array.isArray(response.data.result)) {
+    return response.data.result;
+  } else {
+    return [response.data.result];
+  }
 }
 
 function filterInternalTokenSalesTxs(internalTxs, tokenSalesTxs, address) {
@@ -427,10 +429,10 @@ function filterInternalTokenSalesTxs(internalTxs, tokenSalesTxs, address) {
 
   //     salesTxs.push(txInfo);
   //     console.log(txInfo)
-    // } else {
-    //   console.log(`${tx.hash} not found`);
-    // }
- // });
+  // } else {
+  //   console.log(`${tx.hash} not found`);
+  // }
+  // });
 
   return salesTxs;
 }
@@ -444,9 +446,9 @@ function filterTokenSalesTxs(txs, address) {
   mintTxs.forEach((tx) => {
     // For each minted token, find a transaction where that token
     // is being transferred to another address
-    const tokenTx = txs.filter((t) =>   t.tokenID === tx.tokenID 
-                                    &&  t.contractAddress.toLowerCase() === tx.contractAddress.toLowerCase() 
-                                    &&  t.from.toLowerCase() === address.toLowerCase());
+    const tokenTx = txs.filter((t) => t.tokenID === tx.tokenID
+      && t.contractAddress.toLowerCase() === tx.contractAddress.toLowerCase()
+      && t.from.toLowerCase() === address.toLowerCase());
     if (tokenTx) {
       tokenTx.forEach((t, index) => {
         sales.push(t);
