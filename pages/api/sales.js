@@ -54,7 +54,7 @@ const FILTER_ADDRESSES = {
 const TEXT_ARTIST = 'Artist';
 
 const PAGE_SIZE = 1000;
-const API_DELAY = 60;
+const API_DELAY = 51;
 const REPORT_TIME_TO_LIVE = 1 * 12 * 60 * 60 * 1000; // 12 hours
 const WEI_DIVISOR = Math.pow(10, 18);
 
